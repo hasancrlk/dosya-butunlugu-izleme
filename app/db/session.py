@@ -1,7 +1,7 @@
 """Database engine and session factory."""
 
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Generator
 
 from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
@@ -70,23 +70,18 @@ def get_session() -> Generator[Session, None, None]:
 
 def get_db_session() -> Generator[Session, None, None]:
     """FastAPI dependency that yields a DB session."""
-    session = _get_session_factory()()
-    try:
+    with get_session() as session:
         yield session
-        session.commit()
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()
 
 
 def init_db() -> None:
-    """Create all tables (dev / first-run convenience)."""
+    """Create tables for SQLite (dev/tests). Other databases use `alembic upgrade head`."""
+    if not get_settings().DATABASE_URL.startswith("sqlite"):
+        return
     # Ensure every model is imported so Base.metadata is fully populated.
-    import app.models.baseline  # noqa: F401
+    import app.models.audit_log
+    import app.models.baseline
     import app.models.scan  # noqa: F401
-    import app.models.audit_log  # noqa: F401
 
     Base.metadata.create_all(bind=get_engine())
 

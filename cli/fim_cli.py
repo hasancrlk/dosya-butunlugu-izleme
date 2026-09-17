@@ -4,24 +4,20 @@ from __future__ import annotations
 
 import json
 import sys
-from pathlib import Path
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
-# ── Bootstrap DB before any import that touches SQLAlchemy ──────
+from app.db.repository import verify_audit_chain
 from app.db.session import get_session, init_db
-from app.db.repository import (
-    add_baseline_entries,
-    add_scan_findings,
-    create_baseline_session,
-    create_scan_session,
-    get_baseline_session,
-)
-from app.services.scanner import scan_directory
-from app.services.diff_engine import compute_diff
 from app.services.report_service import build_report, report_to_csv, report_to_json
+from app.services.workflow import (
+    BaselineNotFoundError,
+    BaselineTamperedError,
+    create_baseline,
+    run_scan,
+)
 
 cli = typer.Typer(
     name="fim-sentinel",
@@ -29,112 +25,70 @@ cli = typer.Typer(
     add_completion=False,
 )
 console = Console()
+COLORS = {"MODIFIED": "yellow", "ADDED": "green", "DELETED": "red"}
+
+
+def _fail(msg: str) -> None:
+    console.print(f"[bold red]✗ {msg}[/]")
+    raise typer.Exit(code=1)
 
 
 @cli.command()
 def baseline(
     path: str = typer.Option(..., "--path", "-p", help="Directory to baseline."),
+    follow_symlinks: bool = typer.Option(False, "--follow-symlinks", help="Follow symlinks."),
 ) -> None:
-    """Create a baseline snapshot of the target directory."""
+    """Create a signed baseline snapshot of the target directory."""
     init_db()
-    target = str(Path(path).resolve())
-    console.print(f"[bold cyan]Scanning:[/] {target}")
-
-    scan_result = scan_directory(target)
-
     with get_session() as db:
-        session_obj = create_baseline_session(
-            db,
-            target_path=target,
-            file_count=scan_result.file_count,
-            error_count=scan_result.error_count,
-        )
-        entries = [
-            {
-                "file_path": r.file_path,
-                "sha256": r.sha256,
-                "size_bytes": r.size_bytes,
-                "mtime": r.mtime,
-            }
-            for r in scan_result.file_records
-        ]
-        add_baseline_entries(db, session_obj.id, entries)
-        bid = session_obj.id
+        session, result = create_baseline(db, path, follow_symlinks)
+        bid, target = session.id, session.target_path
 
     console.print(
-        f"[bold green]✓ Baseline created[/]  id={bid}  "
-        f"files={scan_result.file_count}  errors={scan_result.error_count}"
+        f"[bold green]✓ Baseline created[/]  id={bid}  path={target}  "
+        f"files={result.file_count}  errors={result.error_count}"
     )
-    if scan_result.errors:
-        for err in scan_result.errors:
-            console.print(f"  [yellow]⚠ {err}[/]")
+    for err in result.errors:
+        console.print(f"  [yellow]⚠ {err}[/]")
 
 
 @cli.command()
 def scan(
     baseline_id: int = typer.Option(..., "--baseline-id", "-b", help="Baseline session ID."),
 ) -> None:
-    """Run an integrity scan against an existing baseline."""
+    """Run an integrity scan against an existing baseline. Exit code 2 = changes found."""
     init_db()
+    try:
+        with get_session() as db:
+            scan_obj, diff, result = run_scan(db, baseline_id)
+            sid = scan_obj.id
+    except BaselineNotFoundError:
+        _fail("Baseline not found.")
+    except BaselineTamperedError:
+        _fail("Baseline signature invalid — baseline may be tampered!")
 
-    with get_session() as db:
-        bl = get_baseline_session(db, baseline_id)
-        if bl is None:
-            console.print("[bold red]✗ Baseline not found.[/]")
-            raise typer.Exit(code=1)
-
-        console.print(f"[bold cyan]Scanning:[/] {bl.target_path}")
-        scan_result = scan_directory(bl.target_path)
-        diff = compute_diff(bl.entries, scan_result.file_records)
-
-        scan_obj = create_scan_session(
-            db,
-            baseline_id=bl.id,
-            total_modified=diff.total_modified,
-            total_added=diff.total_added,
-            total_deleted=diff.total_deleted,
-            total_errors=scan_result.error_count,
-        )
-        finding_dicts = [
-            {
-                "file_path": f.file_path,
-                "change_type": f.change_type,
-                "old_hash": f.old_hash,
-                "new_hash": f.new_hash,
-                "old_size": f.old_size,
-                "new_size": f.new_size,
-                "detail": f.detail,
-            }
-            for f in diff.findings
-        ]
-        add_scan_findings(db, scan_obj.id, finding_dicts)
-        sid = scan_obj.id
-
-    # Summary table
     table = Table(title=f"Scan #{sid} Results")
     table.add_column("Metric", style="cyan")
     table.add_column("Count", justify="right")
-    table.add_row("Modified", str(diff.total_modified))
-    table.add_row("Added", str(diff.total_added))
-    table.add_row("Deleted", str(diff.total_deleted))
-    table.add_row("Errors", str(scan_result.error_count))
+    for label, value in (
+        ("Modified", diff.total_modified),
+        ("Added", diff.total_added),
+        ("Deleted", diff.total_deleted),
+        ("Errors", result.error_count),
+    ):
+        table.add_row(label, str(value))
     console.print(table)
 
     if diff.findings:
-        detail_table = Table(title="Findings")
-        detail_table.add_column("Type", style="bold")
-        detail_table.add_column("File Path")
-        detail_table.add_column("Detail")
+        details = Table(title="Findings")
+        details.add_column("Type", style="bold")
+        details.add_column("File Path")
+        details.add_column("Detail")
         for f in diff.findings:
-            color = {"MODIFIED": "yellow", "ADDED": "green", "DELETED": "red"}.get(
-                f.change_type.value, "white"
-            )
-            detail_table.add_row(
-                f"[{color}]{f.change_type.value}[/{color}]",
-                f.file_path,
-                f.detail or "",
-            )
-        console.print(detail_table)
+            c = COLORS.get(f.change_type.value, "white")
+            details.add_row(f"[{c}]{f.change_type.value}[/{c}]", f.file_path, f.detail or "")
+        console.print(details)
+        raise typer.Exit(code=2)  # lets cron/CI react to changes
 
 
 @cli.command()
@@ -144,19 +98,26 @@ def report(
 ) -> None:
     """Export a scan report as JSON or CSV."""
     init_db()
-
     with get_session() as db:
         rpt = build_report(db, scan_id)
-
     if rpt is None:
-        console.print("[bold red]✗ Scan not found.[/]")
-        raise typer.Exit(code=1)
+        _fail("Scan not found.")
 
     if format.lower() == "csv":
         sys.stdout.write(report_to_csv(rpt))
     else:
-        sys.stdout.write(json.dumps(report_to_json(rpt), indent=2, default=str))
-        sys.stdout.write("\n")
+        sys.stdout.write(json.dumps(report_to_json(rpt), indent=2, default=str) + "\n")
+
+
+@cli.command("verify-audit")
+def verify_audit() -> None:
+    """Verify the tamper-evident audit log chain."""
+    init_db()
+    with get_session() as db:
+        ok, broken = verify_audit_chain(db)
+    if not ok:
+        _fail(f"Audit chain broken at row id={broken}")
+    console.print("[bold green]✓ Audit chain intact[/]")
 
 
 def main() -> None:

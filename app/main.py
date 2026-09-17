@@ -13,7 +13,7 @@ from app.db.session import init_db
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan: initialise DB on startup."""
-    init_db()
+    init_db()  # SQLite dev only; PostgreSQL schema is managed by Alembic
     yield
 
 

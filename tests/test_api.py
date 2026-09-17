@@ -2,26 +2,27 @@
 
 from __future__ import annotations
 
-import os
+import json
+from collections.abc import Generator
 from pathlib import Path
-from typing import Generator
 
 import pytest
 from fastapi.testclient import TestClient
 
-# Ensure in-memory DB
-os.environ["FIM_DATABASE_URL"] = "sqlite:///:memory:"
-
-from app.db.session import reset_engine  # noqa: E402
-from app.main import create_app  # noqa: E402
+from app.config import get_settings
+from app.db.session import get_session, reset_engine
+from app.main import create_app
+from app.models.audit_log import AuditLog
+from app.models.baseline import BaselineEntry
 
 
 @pytest.fixture()
-def client() -> Generator[TestClient, None, None]:
-    """Yield a TestClient whose lifespan (init_db) has been triggered."""
+def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, None]:
+    """Authenticated TestClient allowed to scan only tmp_path."""
+    monkeypatch.setenv("FIM_ALLOWED_PATHS", json.dumps([str(tmp_path)]))
+    get_settings.cache_clear()
     reset_engine()
-    app = create_app()
-    with TestClient(app) as c:
+    with TestClient(create_app(), headers={"X-API-Key": "test-api-key"}) as c:
         yield c
 
 
@@ -88,3 +89,40 @@ def test_baseline_not_found(client: TestClient) -> None:
 def test_report_not_found(client: TestClient) -> None:
     resp = client.get("/api/v1/reports/9999")
     assert resp.status_code == 404
+
+
+def test_missing_api_key_rejected(client: TestClient) -> None:
+    resp = client.post("/api/v1/scan", json={"baseline_id": 1}, headers={"X-API-Key": "wrong"})
+    assert resp.status_code == 401
+
+
+def test_path_outside_allowlist_forbidden(client: TestClient) -> None:
+    resp = client.post("/api/v1/baseline", json={"target_path": "/etc"})
+    assert resp.status_code == 403
+
+
+def test_tampered_baseline_detected(client: TestClient, sample_dir: Path) -> None:
+    baseline_id = client.post(
+        "/api/v1/baseline", json={"target_path": str(sample_dir)}
+    ).json()["id"]
+
+    # Attacker modifies the file AND rewrites the stored hash to hide it
+    (sample_dir / "file_a.txt").write_text("backdoor")
+    with get_session() as db:
+        entry = db.query(BaselineEntry).filter(BaselineEntry.file_path.like("%file_a.txt")).one()
+        entry.sha256 = "0" * 64
+
+    resp = client.post("/api/v1/scan", json={"baseline_id": baseline_id})
+    assert resp.status_code == 409
+
+
+def test_audit_chain_detects_edit(client: TestClient, sample_dir: Path) -> None:
+    client.post("/api/v1/baseline", json={"target_path": str(sample_dir)})
+    assert client.get("/api/v1/audit/verify").json()["intact"] is True
+
+    with get_session() as db:
+        db.query(AuditLog).first().detail = "rewritten"
+
+    body = client.get("/api/v1/audit/verify").json()
+    assert body["intact"] is False
+    assert body["first_broken_id"] == 1

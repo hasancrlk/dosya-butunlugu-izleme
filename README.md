@@ -11,7 +11,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](Dockerfile)
 
-*Enterprise-grade file integrity monitoring with forensic audit trails, REST API, and CLI.*
+*File integrity monitoring with signed baselines, a tamper-evident audit trail, REST API, and CLI.*
 
 </div>
 
@@ -105,10 +105,13 @@ graph TB
 >
 > In digital forensics and incident response, **chain of custody** proves that evidence has not been tampered with. FIM-Sentinel enforces this through:
 >
-> 1. **Cryptographic Hashes** — Every file's SHA-256 digest is recorded at baseline time.
-> 2. **Append-Only Audit Log** — All operations (baseline creation, scans) are logged with timestamps. Records are **never updated or deleted**.
-> 3. **Immutable Scan History** — Past scan results are preserved indefinitely, enabling forensic timeline reconstruction.
-> 4. **Deterministic Diffing** — The diff engine compares exact hash values, not file metadata alone.
+> 1. **Cryptographic Hashes** — SHA-256 content hash plus size, permissions and ownership for every file.
+> 2. **Signed Baselines** — Each baseline is HMAC-SHA256 signed (`FIM_HMAC_KEY`). A baseline edited in the database is rejected at scan time (HTTP 409) and the attempt is audited.
+> 3. **Tamper-Evident Audit Log** — Every row is HMAC-chained to the previous one; editing, deleting or reordering rows breaks the chain (`GET /api/v1/audit/verify`, `fim-sentinel verify-audit`). On PostgreSQL a trigger also blocks UPDATE/DELETE.
+> 4. **Symlink-Safe Scanning** — Links are recorded by target instead of followed, so re-pointing a link is detected and nothing outside the tree is read.
+> 5. **No False Deletions** — Files that exist but cannot be read are reported as errors, never as DELETED.
+>
+> ⚠️ Keep `FIM_HMAC_KEY` outside the monitored host's database (e.g. a secrets manager). An attacker holding both the DB and the key can forge baselines.
 
 ---
 
@@ -132,7 +135,7 @@ source .venv/bin/activate  # Linux/macOS
 # .venv\Scripts\activate   # Windows
 
 # Install dependencies
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 
 # Copy environment config
 cp .env.example .env
@@ -211,20 +214,20 @@ http://localhost:8000
 curl http://localhost:8000/health
 
 # Create baseline
-curl -X POST http://localhost:8000/api/v1/baseline \
+curl -H "X-API-Key: $FIM_API_KEY" -X POST http://localhost:8000/api/v1/baseline \
   -H "Content-Type: application/json" \
   -d '{"target_path": "/var/www/html"}'
 
 # Run scan
-curl -X POST http://localhost:8000/api/v1/scan \
+curl -H "X-API-Key: $FIM_API_KEY" -X POST http://localhost:8000/api/v1/scan \
   -H "Content-Type: application/json" \
   -d '{"baseline_id": 1}'
 
 # Get report (JSON)
-curl http://localhost:8000/api/v1/reports/1
+curl -H "X-API-Key: $FIM_API_KEY" http://localhost:8000/api/v1/reports/1
 
 # Get report (CSV)
-curl http://localhost:8000/api/v1/reports/1?format=csv -o report.csv
+curl -H "X-API-Key: $FIM_API_KEY" http://localhost:8000/api/v1/reports/1?format=csv -o report.csv
 ```
 
 ---
@@ -232,7 +235,10 @@ curl http://localhost:8000/api/v1/reports/1?format=csv -o report.csv
 ## 🐳 Docker Deployment
 
 ```bash
-# Build and start (app + PostgreSQL)
+# Configure secrets first (API key, HMAC key, Postgres password)
+cp .env.example .env && $EDITOR .env
+
+# Build and start (app + PostgreSQL; migrations run automatically)
 docker compose up -d --build
 
 # View logs
@@ -242,7 +248,7 @@ docker compose logs -f fim-sentinel
 docker compose down
 ```
 
-The API will be available at `http://localhost:8000` with PostgreSQL as the backend.
+The API listens on `127.0.0.1:8000`; PostgreSQL is not exposed to the host.
 
 Mount a directory to monitor:
 ```bash
@@ -251,7 +257,7 @@ mkdir -p watch
 cp -r /path/to/monitor/* watch/
 
 # Then baseline it
-curl -X POST http://localhost:8000/api/v1/baseline \
+curl -H "X-API-Key: $FIM_API_KEY" -X POST http://localhost:8000/api/v1/baseline \
   -d '{"target_path": "/watch"}' \
   -H "Content-Type: application/json"
 ```
@@ -277,10 +283,10 @@ pytest tests/test_api.py -v
 
 | Module | Tests |
 |--------|-------|
-| `hasher.py` | Known hash, empty file, large file streaming, permission denied, missing file |
+| `hasher.py` | Known hash, empty/large file, permission denied, missing file, symlink handling, mode collection |
 | `scanner.py` | File counting, hash verification, non-existent dir, empty dir |
-| `diff_engine.py` | No changes, modified, added, deleted, combined changes |
-| `API` | Health, full workflow (baseline→scan→report), modification detection, 404 handling |
+| `diff_engine.py` | Modified/added/deleted, unreadable ≠ deleted, permission change, symlink retarget |
+| `API` | Full workflow, auth, path allowlist, tampered baseline (409), audit chain verification |
 
 ---
 
@@ -294,6 +300,11 @@ All settings are loaded from environment variables (prefix: `FIM_`) or a `.env` 
 | `FIM_HASH_CHUNK_SIZE` | `65536` | Bytes per chunk for streaming hash |
 | `FIM_FOLLOW_SYMLINKS` | `false` | Follow symbolic links during scan |
 | `FIM_LOG_LEVEL` | `INFO` | Logging level |
+| `FIM_API_KEY` | — (**required for API**) | Value expected in the `X-API-Key` header |
+| `FIM_HMAC_KEY` | — (**required**, ≥32 chars) | Signs baselines and the audit chain |
+| `FIM_ALLOWED_PATHS` | `[]` | JSON list of directories the API may scan |
+
+> `fim-sentinel scan` exits with code **2** when changes are found, so it can drive cron jobs or CI alerts.
 
 ---
 

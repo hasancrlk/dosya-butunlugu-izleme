@@ -18,6 +18,7 @@ class ScanResult:
 
     target_path: str
     file_records: list[HashResult] = field(default_factory=list)
+    failed: list[HashResult] = field(default_factory=list)  # seen but unreadable
     errors: list[str] = field(default_factory=list)
 
     @property
@@ -29,55 +30,52 @@ class ScanResult:
         return len(self.errors)
 
 
-def scan_directory(
-    target_path: str,
-    follow_symlinks: bool | None = None,
-) -> ScanResult:
-    """Recursively walk *target_path*, hash every regular file.
+def scan_directory(target_path: str, follow_symlinks: bool | None = None) -> ScanResult:
+    """Recursively walk *target_path* and hash every regular file and symlink.
 
-    Symlink loops and permission errors are accumulated in
-    ``ScanResult.errors`` instead of raising.
+    Errors are accumulated instead of raised. Unreadable files are kept in
+    ``failed`` so the diff engine does not report them as deleted.
     """
     if follow_symlinks is None:
         follow_symlinks = get_settings().FOLLOW_SYMLINKS
 
     result = ScanResult(target_path=target_path)
-    seen_real_dirs: set[str] = set()
-
     if not os.path.isdir(target_path):
         result.errors.append(f"Target path is not a directory: {target_path}")
         return result
 
+    seen_real_dirs: set[str] = set()
+
+    def _onerror(exc: OSError) -> None:
+        result.errors.append(f"Cannot read directory {exc.filename}: {exc.strerror}")
+
     for dirpath, dirnames, filenames in os.walk(
-        target_path, followlinks=follow_symlinks
+        target_path, followlinks=follow_symlinks, onerror=_onerror
     ):
-        # Symlink-loop guard for directories
         real_dir = os.path.realpath(dirpath)
         if real_dir in seen_real_dirs:
-            msg = f"Symlink loop detected, skipping: {dirpath} -> {real_dir}"
-            logger.warning(msg)
-            result.errors.append(msg)
-            dirnames.clear()  # stop descending
+            result.errors.append(f"Symlink loop detected, skipping: {dirpath} -> {real_dir}")
+            dirnames.clear()
             continue
         seen_real_dirs.add(real_dir)
 
-        for fname in filenames:
-            fpath = os.path.join(dirpath, fname)
+        candidates = list(filenames)
+        if not follow_symlinks:
+            # os.walk lists symlinked dirs in dirnames — record the links themselves
+            candidates += [d for d in dirnames if os.path.islink(os.path.join(dirpath, d))]
 
-            # Skip non-regular files (sockets, devices, …)
-            try:
-                if not os.path.isfile(fpath):
-                    continue
-            except OSError as exc:
-                msg = f"Cannot stat {fpath}: {exc}"
-                logger.warning(msg)
-                result.errors.append(msg)
-                continue
-
-            hr = hash_file(fpath)
+        for name in candidates:
+            hr = hash_file(
+                os.path.join(dirpath, name),
+                follow_symlinks=follow_symlinks,
+                root=target_path,
+            )
             if hr.ok:
                 result.file_records.append(hr)
+            elif hr.error and hr.error.startswith("Not a regular file"):
+                continue  # sockets, FIFOs, devices: ignored by design
             else:
+                result.failed.append(hr)
                 result.errors.append(hr.error)  # type: ignore[arg-type]
 
     return result

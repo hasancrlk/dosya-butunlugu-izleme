@@ -1,9 +1,9 @@
 """Scan session and finding models."""
 
 import enum
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from sqlalchemy import Column, DateTime, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import BigInteger, Column, DateTime, Enum, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 
 from .base import Base
@@ -28,7 +28,7 @@ class ScanSession(Base):
     )
     created_at = Column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
         nullable=False,
     )
     status = Column(String(20), default="completed")
@@ -62,8 +62,8 @@ class ScanFinding(Base):
     change_type = Column(Enum(ChangeType), nullable=False)
     old_hash = Column(String(64), nullable=True)
     new_hash = Column(String(64), nullable=True)
-    old_size = Column(Integer, nullable=True)
-    new_size = Column(Integer, nullable=True)
+    old_size = Column(BigInteger, nullable=True)
+    new_size = Column(BigInteger, nullable=True)
     detail = Column(Text, nullable=True)
 
     session = relationship("ScanSession", back_populates="findings")

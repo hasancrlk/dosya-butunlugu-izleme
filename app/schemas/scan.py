@@ -1,7 +1,6 @@
 """Schemas for scan endpoints."""
 
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -17,11 +16,11 @@ class ScanFindingOut(BaseModel):
 
     file_path: str
     change_type: str
-    old_hash: Optional[str] = None
-    new_hash: Optional[str] = None
-    old_size: Optional[int] = None
-    new_size: Optional[int] = None
-    detail: Optional[str] = None
+    old_hash: str | None = None
+    new_hash: str | None = None
+    old_size: int | None = None
+    new_size: int | None = None
+    detail: str | None = None
 
     model_config = {"from_attributes": True}
 

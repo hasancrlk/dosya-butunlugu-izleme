@@ -1,34 +1,29 @@
-version: "3.9"
-
 services:
   postgres:
     image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: fim_user
-      POSTGRES_PASSWORD: fim_pass
-      POSTGRES_DB: fim_sentinel
-    ports:
-      - "5432:5432"
+    env_file: .env
+    # No published port: the database is reachable only from the app network.
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U fim_user -d fim_sentinel"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 5
 
   fim-sentinel:
     build: .
-    ports:
-      - "8000:8000"
+    env_file: .env
     environment:
-      FIM_DATABASE_URL: postgresql://fim_user:fim_pass@postgres:5432/fim_sentinel
-      FIM_LOG_LEVEL: INFO
+      FIM_DATABASE_URL: postgresql://${POSTGRES_USER:?}:${POSTGRES_PASSWORD:?}@postgres:5432/${POSTGRES_DB:?}
+      FIM_ALLOWED_PATHS: '["/watch"]'
+    ports:
+      - "127.0.0.1:8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
     volumes:
-      - ./watch:/watch:ro  # mount directory to monitor
+      - ./watch:/watch:ro
 
 volumes:
   pgdata:

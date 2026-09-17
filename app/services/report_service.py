@@ -21,7 +21,7 @@ def build_report(db: Session, scan_id: int) -> ReportResponse | None:
     findings = [
         ReportFinding(
             file_path=f.file_path,
-            change_type=f.change_type.value if hasattr(f.change_type, 'value') else f.change_type,
+            change_type=f.change_type.value,
             old_hash=f.old_hash,
             new_hash=f.new_hash,
             old_size=f.old_size,

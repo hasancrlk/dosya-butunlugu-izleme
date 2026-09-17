@@ -11,7 +11,10 @@ import app.models.baseline  # noqa: F401
 import app.models.scan  # noqa: F401
 import app.models.audit_log  # noqa: F401
 
+from app.config import get_settings
+
 config = context.config
+config.set_main_option("sqlalchemy.url", get_settings().DATABASE_URL)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

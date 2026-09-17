@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import os
-import textwrap
+from collections.abc import Generator
 from pathlib import Path
-from typing import Generator
 
 import pytest
 from sqlalchemy import create_engine
@@ -13,10 +12,12 @@ from sqlalchemy.orm import Session, sessionmaker
 
 # Override DB URL BEFORE any app import
 os.environ["FIM_DATABASE_URL"] = "sqlite:///:memory:"
+os.environ["FIM_API_KEY"] = "test-api-key"
+os.environ["FIM_HMAC_KEY"] = "test-hmac-key-that-is-long-enough-123"
 
-from app.config import get_settings  # noqa: E402
-from app.models.base import Base  # noqa: E402
-from app.db.session import reset_engine  # noqa: E402
+from app.config import get_settings
+from app.db.session import reset_engine
+from app.models.base import Base
 
 
 @pytest.fixture(autouse=True)

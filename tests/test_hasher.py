@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from app.services.hasher import hash_file, HashResult
+from app.services.hasher import hash_file
 
 
 def test_hash_known_content(tmp_path: Path) -> None:
@@ -58,8 +58,8 @@ def test_hash_permission_denied(tmp_path: Path) -> None:
     f.write_text("secret")
 
     # Skip on Windows where chmod doesn't reliably deny read
-    if os.name == "nt":
-        pytest.skip("chmod not reliable on Windows")
+    if os.name == "nt" or os.geteuid() == 0:
+        pytest.skip("chmod does not deny read on Windows or for root")
 
     f.chmod(0o000)
     try:
@@ -75,3 +75,33 @@ def test_hash_nonexistent_file() -> None:
     result = hash_file("/nonexistent/path/xyz.bin")
     assert not result.ok
     assert result.error is not None
+
+
+def test_symlink_not_followed_hashes_link_target(tmp_path: Path) -> None:
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret")
+    link = tmp_path / "link"
+    link.symlink_to(outside)
+
+    result = hash_file(str(link), follow_symlinks=False)
+    assert result.ok
+    assert result.sha256 == hashlib.sha256(f"symlink:{outside}".encode()).hexdigest()
+
+
+def test_followed_symlink_escaping_root_rejected(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    (tmp_path / "outside.txt").write_text("secret")
+    link = root / "link"
+    link.symlink_to(tmp_path / "outside.txt")
+
+    result = hash_file(str(link), follow_symlinks=True, root=str(root))
+    assert not result.ok
+    assert "escapes" in (result.error or "")
+
+
+def test_hash_collects_mode(tmp_path: Path) -> None:
+    f = tmp_path / "x"
+    f.write_text("x")
+    f.chmod(0o640)
+    assert hash_file(str(f)).mode & 0o777 == 0o640

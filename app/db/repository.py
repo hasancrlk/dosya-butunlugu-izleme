@@ -2,54 +2,59 @@
 
 from __future__ import annotations
 
-from typing import Sequence
+import hmac
+from collections.abc import Sequence
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session, joinedload
 
-from app.models.audit_log import AuditLog
+from app.models.audit_log import GENESIS_HASH, AuditLog
 from app.models.baseline import BaselineEntry, BaselineSession
 from app.models.scan import ScanFinding, ScanSession
+from app.services.integrity import audit_entry_hash
 
 
-# ── Audit helpers ──────────────────────────────────────────────────
-def _audit(db: Session, action: str, detail: str | None = None) -> None:
-    db.add(AuditLog(action=action, detail=detail))
+# ── Audit ──────────────────────────────────────────────────────────
+def audit(db: Session, action: str, detail: str | None = None, actor: str = "system") -> None:
+    last = (
+        db.query(AuditLog).order_by(AuditLog.id.desc()).with_for_update().first()
+    )
+    prev = last.entry_hash if last else GENESIS_HASH
+    ts = datetime.now(UTC)
+    db.add(AuditLog(
+        timestamp=ts, action=action, actor=actor, detail=detail,
+        prev_hash=prev, entry_hash=audit_entry_hash(prev, ts, action, actor, detail),
+    ))
+    db.flush()
+
+
+def verify_audit_chain(db: Session) -> tuple[bool, int | None]:
+    """Return (ok, id_of_first_broken_row)."""
+    prev = GENESIS_HASH
+    for row in db.query(AuditLog).order_by(AuditLog.id).yield_per(1000):
+        expected = audit_entry_hash(prev, row.timestamp, row.action, row.actor, row.detail)
+        if row.prev_hash != prev or not hmac.compare_digest(expected, row.entry_hash):
+            return False, row.id
+        prev = row.entry_hash
+    return True, None
 
 
 # ── Baseline ───────────────────────────────────────────────────────
-def create_baseline_session(
-    db: Session,
-    target_path: str,
-    file_count: int = 0,
-    error_count: int = 0,
-    status: str = "completed",
-) -> BaselineSession:
-    session_obj = BaselineSession(
-        target_path=target_path,
-        file_count=file_count,
-        error_count=error_count,
-        status=status,
-    )
-    db.add(session_obj)
+def create_baseline_session(db: Session, **fields) -> BaselineSession:
+    obj = BaselineSession(**fields)
+    db.add(obj)
     db.flush()
-    _audit(db, "BASELINE_CREATED", f"session_id={session_obj.id} path={target_path}")
-    return session_obj
+    audit(db, "BASELINE_CREATED", f"session_id={obj.id} path={obj.target_path}")
+    return obj
 
 
-def add_baseline_entries(
-    db: Session, session_id: int, entries: list[dict]
-) -> int:
-    objects = [
-        BaselineEntry(session_id=session_id, **entry) for entry in entries
-    ]
-    db.add_all(objects)
+def add_baseline_entries(db: Session, session_id: int, entries: list[dict]) -> int:
+    db.add_all(BaselineEntry(session_id=session_id, **e) for e in entries)
     db.flush()
-    return len(objects)
+    return len(entries)
 
 
-def get_baseline_session(
-    db: Session, session_id: int
-) -> BaselineSession | None:
+def get_baseline_session(db: Session, session_id: int) -> BaselineSession | None:
     return (
         db.query(BaselineSession)
         .options(joinedload(BaselineSession.entries))
@@ -59,49 +64,24 @@ def get_baseline_session(
 
 
 # ── Scan ───────────────────────────────────────────────────────────
-def create_scan_session(
-    db: Session,
-    baseline_id: int,
-    total_modified: int = 0,
-    total_added: int = 0,
-    total_deleted: int = 0,
-    total_errors: int = 0,
-    status: str = "completed",
-) -> ScanSession:
-    scan = ScanSession(
-        baseline_id=baseline_id,
-        total_modified=total_modified,
-        total_added=total_added,
-        total_deleted=total_deleted,
-        total_errors=total_errors,
-        status=status,
-    )
+def create_scan_session(db: Session, **fields) -> ScanSession:
+    scan = ScanSession(**fields)
     db.add(scan)
     db.flush()
-    _audit(db, "SCAN_COMPLETED", f"scan_id={scan.id} baseline_id={baseline_id}")
+    audit(db, "SCAN_COMPLETED", f"scan_id={scan.id} baseline_id={scan.baseline_id}")
     return scan
 
 
-def add_scan_findings(
-    db: Session, session_id: int, findings: list[dict]
-) -> int:
-    objects = [
-        ScanFinding(session_id=session_id, **finding) for finding in findings
-    ]
-    db.add_all(objects)
+def add_scan_findings(db: Session, session_id: int, findings: list[dict]) -> int:
+    db.add_all(ScanFinding(session_id=session_id, **f) for f in findings)
     db.flush()
-    return len(objects)
+    return len(findings)
 
 
-def get_scan_session(
-    db: Session, scan_id: int
-) -> ScanSession | None:
+def get_scan_session(db: Session, scan_id: int) -> ScanSession | None:
     return (
         db.query(ScanSession)
-        .options(
-            joinedload(ScanSession.findings),
-            joinedload(ScanSession.baseline),
-        )
+        .options(joinedload(ScanSession.findings), joinedload(ScanSession.baseline))
         .filter(ScanSession.id == scan_id)
         .first()
     )

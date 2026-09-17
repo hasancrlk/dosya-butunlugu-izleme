@@ -7,6 +7,7 @@
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![SQLAlchemy 2.0](https://img.shields.io/badge/SQLAlchemy-2.0-red?logo=python&logoColor=white)](https://www.sqlalchemy.org/)
+[![CI](https://github.com/hasancrlk/fim-sentinel/actions/workflows/ci.yml/badge.svg)](https://github.com/hasancrlk/fim-sentinel/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](Dockerfile)
 
@@ -122,7 +123,7 @@ graph TB
 
 ```bash
 # Clone the repository
-git clone https://github.com/<your-username>/fim-sentinel.git
+git clone https://github.com/hasancrlk/fim-sentinel.git
 cd fim-sentinel
 
 # Create virtual environment

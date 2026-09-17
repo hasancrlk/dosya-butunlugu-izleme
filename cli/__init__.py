@@ -1,0 +1,1 @@
+"""FIM-Sentinel CLI package."""

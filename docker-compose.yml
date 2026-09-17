@@ -1,0 +1,34 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: fim_user
+      POSTGRES_PASSWORD: fim_pass
+      POSTGRES_DB: fim_sentinel
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fim_user -d fim_sentinel"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  fim-sentinel:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      FIM_DATABASE_URL: postgresql://fim_user:fim_pass@postgres:5432/fim_sentinel
+      FIM_LOG_LEVEL: INFO
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./watch:/watch:ro  # mount directory to monitor
+
+volumes:
+  pgdata:

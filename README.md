@@ -1,84 +1,139 @@
 <div align="center">
 
-# 🛡️ FIM-Sentinel
+# 🛡️ Dosya Bütünlüğü İzleme (FIM-Sentinel)
 
-**File Integrity Monitoring & Forensics Tool**
+**Dosya Bütünlüğü İzleme ve Adli Bilişim Aracı**
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![SQLAlchemy 2.0](https://img.shields.io/badge/SQLAlchemy-2.0-red?logo=python&logoColor=white)](https://www.sqlalchemy.org/)
-[![CI](https://github.com/hasancrlk/fim-sentinel/actions/workflows/ci.yml/badge.svg)](https://github.com/hasancrlk/fim-sentinel/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)](Dockerfile)
+[![CI](https://github.com/hasancrlk/dosya-butunlugu-izleme/actions/workflows/ci.yml/badge.svg)](https://github.com/hasancrlk/dosya-butunlugu-izleme/actions/workflows/ci.yml)
+[![Lisans: MIT](https://img.shields.io/badge/Lisans-MIT-yellow.svg)](LICENSE)
+[![Docker](https://img.shields.io/badge/Docker-hazır-2496ED?logo=docker&logoColor=white)](Dockerfile)
 
-*File integrity monitoring with signed baselines, a tamper-evident audit trail, REST API, and CLI.*
+*İmzalı temel kayıtlar, kurcalanınca belli olan denetim kaydı, REST API ve komut satırı aracıyla dosya bütünlüğü izleme.*
 
 </div>
 
 ---
 
-## 📋 Table of Contents
+## 🧭 Kısaca: Bu Proje Ne İşe Yarar?
 
-- [Overview](#overview)
-- [Architecture](#architecture)
-- [Chain of Custody](#-chain-of-custody)
-- [Quick Start](#-quick-start)
-- [CLI Usage](#-cli-usage)
-- [API Usage](#-api-usage)
-- [Docker Deployment](#-docker-deployment)
-- [Testing](#-testing)
-- [Configuration](#%EF%B8%8F-configuration)
-- [Project Structure](#-project-structure)
-- [Contributing](#-contributing)
+Bir sunucuya sızan saldırgan genellikle iz bırakır. Bir web sayfasının içine
+zararlı kod ekler, sunucuya bir "web shell" (`shell.php`) yükler ya da bir
+yapılandırma dosyasını değiştirir. Bu değişiklikler çoğu zaman haftalarca
+fark edilmez.
 
----
+Bu araç izlemek istediğiniz klasörün o anki hâlinin **parmak izini** çıkarır.
+Bu kayda "temel kayıt" (baseline) denir. Her dosyanın SHA-256 özeti, boyutu,
+izinleri ve sahibi kaydedilir. Daha sonra aynı klasör yeniden taranır ve
+temel kayıtla karşılaştırılır. Sonuçta şu üç soru cevaplanır:
 
-## Overview
+- **Hangi dosyalar değişti?** (`MODIFIED`)
+- **Hangi dosyalar sonradan eklendi?** (`ADDED`)
+- **Hangi dosyalar silindi?** (`DELETED`)
 
-FIM-Sentinel monitors file systems for unauthorized changes by creating cryptographic baselines and detecting modifications, additions, and deletions. Every operation is recorded in an **append-only audit log** to maintain forensic integrity.
+Akıllı bir saldırgan izini silmek için temel kaydı da değiştirmeye çalışır.
+Bu yüzden temel kayıtlar gizli bir anahtarla **imzalanır**. Veritabanında
+elle değiştirilmiş bir temel kayıt tarama sırasında reddedilir. Yapılan her
+işlem de silinemeyen, sırası bozulamayan bir **denetim kaydına** (audit log)
+yazılır. Adli bilişimde bu özelliğe "delil zinciri" (chain of custody)
+denir.
 
-### Key Features
+**Kimin işine yarar?** Web sunucusunda izinsiz değişiklik yakalamak isteyen
+sistem yöneticilerinin, olay müdahalesi (incident response) yapan
+ekiplerin ve dosya bütünlüğü izlemenin (FIM) nasıl çalıştığını öğrenmek
+isteyenlerin.
 
-| Feature | Description |
+| Siz verirsiniz | Araç size verir |
 |---|---|
-| 🔐 **SHA-256 Streaming Hash** | 64 KB chunk-based hashing — handles GB+ files without RAM spikes |
-| 🔄 **Diff Engine** | Detects `MODIFIED`, `ADDED`, `DELETED` changes vs. baseline |
-| 📝 **Append-Only Audit Log** | Immutable forensic trail — records are never deleted or updated |
-| 🐘 **PostgreSQL + SQLite** | Production PostgreSQL with SQLite fallback for development |
-| 🌐 **REST API** | FastAPI with OpenAPI docs, JSON/CSV export |
-| ⌨️ **CLI** | Typer-based CLI with Rich terminal output |
-| 🐳 **Docker Ready** | Multi-stage build with docker-compose (app + PostgreSQL) |
-| 🛡️ **Graceful Error Handling** | Symlink loops & permission errors are logged, never crash |
+| İzlenecek klasör (`/var/www/html`) | İmzalı temel kayıt (her dosyanın özeti, boyutu, izni, sahibi) |
+| Daha sonra "şimdi tara" komutu | Değişen, eklenen ve silinen dosyaların listesi |
+| Rapor isteği | JSON ya da CSV rapor, değişiklik varsa çıkış kodu `2` (cron/CI uyarısı için) |
+
+### ⚡ 3 Adımda Kullanım
+
+1. **Kurun:** aşağıdaki [Hızlı Başlangıç](#-hızlı-başlangıç) bölümündeki
+   komutlar. `.env` dosyasında `FIM_HMAC_KEY` değerini en az 32 karakterlik
+   rastgele bir değerle değiştirmeyi unutmayın.
+2. **Klasörün temel kaydını alın:**
+   ```bash
+   python -m cli.fim_cli baseline --path /var/www/html
+   ```
+3. **Bir süre sonra tarayın.** Dosyalarda değişiklik varsa tablo halinde
+   görürsünüz:
+   ```bash
+   python -m cli.fim_cli scan --baseline-id 1
+   ```
 
 ---
 
-## Architecture
+## 📋 İçindekiler
+
+- [Genel Bakış](#-genel-bakış)
+- [Mimari](#-mimari)
+- [Delil Zinciri](#-delil-zinciri)
+- [Hızlı Başlangıç](#-hızlı-başlangıç)
+- [Komut Satırı (CLI) Kullanımı](#️-komut-satırı-cli-kullanımı)
+- [API Kullanımı](#-api-kullanımı)
+- [Docker ile Kurulum](#-docker-ile-kurulum)
+- [Testler](#-testler)
+- [Yapılandırma](#️-yapılandırma)
+- [Proje Yapısı](#-proje-yapısı)
+- [Katkıda Bulunma](#-katkıda-bulunma)
+
+---
+
+## 🏗 Genel Bakış
+
+FIM-Sentinel, dosya sistemini izinsiz değişikliklere karşı izler. Önce
+kriptografik bir temel kayıt oluşturur, sonra bu kayda göre değiştirilen,
+eklenen ve silinen dosyaları tespit eder. Adli bütünlüğü korumak için her
+işlem **yalnızca eklenebilen** (append-only) bir denetim kaydına yazılır.
+
+### Temel Özellikler
+
+| Özellik | Açıklama |
+|---|---|
+| 🔐 **Parçalı SHA-256 özeti** | Dosya 64 KB'lık parçalar hâlinde okunur, gigabaytlık dosyalarda bile bellek şişmez |
+| 🔄 **Fark motoru** | Temel kayda göre `MODIFIED`, `ADDED`, `DELETED` değişikliklerini bulur |
+| ✍️ **İmzalı temel kayıt** | HMAC-SHA256 imzası. Elle değiştirilen temel kayıt reddedilir (HTTP 409) |
+| 📝 **Zincirli denetim kaydı** | Her satır bir öncekine bağlı. Silinen, değiştirilen ya da yeri değişen satır zinciri kırar |
+| 🐘 **PostgreSQL + SQLite** | Canlı ortamda PostgreSQL, geliştirmede SQLite |
+| 🌐 **REST API** | FastAPI, OpenAPI belgesi, JSON/CSV dışa aktarım, `X-API-Key` ile korumalı |
+| ⌨️ **Komut satırı aracı** | Typer tabanlı, Rich ile renkli tablo çıktısı |
+| 🐳 **Docker** | Çok aşamalı imaj, docker-compose ile uygulama + PostgreSQL |
+| 🛡️ **Sağlam hata yönetimi** | Sembolik bağlantı döngüleri ve izin hataları kaydedilir, program çökmez |
+
+---
+
+## 🧭 Mimari
 
 ```mermaid
 graph TB
-    subgraph Interfaces
+    subgraph Arayüzler
         API["🌐 FastAPI REST API"]
         CLI["⌨️ Typer CLI"]
     end
 
-    subgraph Services
-        SC["Scanner"]
-        HS["Hasher\nSHA-256 / 64KB chunks"]
-        DE["Diff Engine"]
-        RS["Report Service\nJSON / CSV"]
+    subgraph Servisler
+        SC["Tarayıcı (Scanner)"]
+        HS["Özetleyici (Hasher)\nSHA-256 / 64KB parça"]
+        DE["Fark Motoru"]
+        RS["Rapor Servisi\nJSON / CSV"]
     end
 
-    subgraph Data Layer
+    subgraph Veri Katmanı
         REPO["Repository"]
-        DB[("PostgreSQL\nor SQLite")]
+        DB[("PostgreSQL\nya da SQLite")]
     end
 
-    subgraph Models
+    subgraph Modeller
         BS["BaselineSession"]
         BE["BaselineEntry"]
         SS["ScanSession"]
         SF["ScanFinding"]
-        AL["AuditLog\n(append-only)"]
+        AL["AuditLog\n(yalnızca ekleme)"]
     end
 
     API --> SC
@@ -99,77 +154,111 @@ graph TB
 
 ---
 
-## 🔗 Chain of Custody
+## 🔗 Delil Zinciri
 
-> **Why does this matter?**
+> **Bu neden önemli?**
 >
-> In digital forensics and incident response, **chain of custody** proves that evidence has not been tampered with. FIM-Sentinel enforces this through:
+> Dijital adli bilişimde ve olay müdahalesinde **delil zinciri** (chain of
+> custody), delilin sonradan kurcalanmadığını kanıtlamak demektir.
+> FIM-Sentinel bunu beş yolla sağlar:
 >
-> 1. **Cryptographic Hashes** — SHA-256 content hash plus size, permissions and ownership for every file.
-> 2. **Signed Baselines** — Each baseline is HMAC-SHA256 signed (`FIM_HMAC_KEY`). A baseline edited in the database is rejected at scan time (HTTP 409) and the attempt is audited.
-> 3. **Tamper-Evident Audit Log** — Every row is HMAC-chained to the previous one; editing, deleting or reordering rows breaks the chain (`GET /api/v1/audit/verify`, `fim-sentinel verify-audit`). On PostgreSQL a trigger also blocks UPDATE/DELETE.
-> 4. **Symlink-Safe Scanning** — Links are recorded by target instead of followed, so re-pointing a link is detected and nothing outside the tree is read.
-> 5. **No False Deletions** — Files that exist but cannot be read are reported as errors, never as DELETED.
+> 1. **Kriptografik özetler:** Her dosya için SHA-256 içerik özetinin yanında
+>    boyut, izinler ve sahiplik bilgisi de tutulur.
+> 2. **İmzalı temel kayıtlar:** Her temel kayıt `FIM_HMAC_KEY` ile
+>    HMAC-SHA256 olarak imzalanır. Veritabanında değiştirilmiş bir temel kayıt
+>    tarama anında reddedilir (HTTP 409) ve bu girişim denetim kaydına yazılır.
+> 3. **Kurcalanınca belli olan denetim kaydı:** Her satır HMAC ile bir önceki
+>    satıra zincirlenir. Satır düzenlemek, silmek ya da yerini değiştirmek
+>    zinciri kırar. Kontrol için `GET /api/v1/audit/verify` ya da
+>    `python -m cli.fim_cli verify-audit` kullanılır. PostgreSQL'de ayrıca bir
+>    tetikleyici (trigger) UPDATE/DELETE işlemlerini engeller.
+> 4. **Sembolik bağlantıya karşı güvenli tarama:** Bağlantılar takip
+>    edilmez, hedefleriyle kaydedilir. Bir bağlantının başka yere
+>    yönlendirilmesi değişiklik olarak yakalanır ve izlenen klasörün dışındaki
+>    hiçbir dosya okunmaz.
+> 5. **Yanlış "silindi" uyarısı yok:** Var olan ama okunamayan dosyalar
+>    `DELETED` olarak değil, hata olarak raporlanır.
 >
-> ⚠️ Keep `FIM_HMAC_KEY` outside the monitored host's database (e.g. a secrets manager). An attacker holding both the DB and the key can forge baselines.
+> ⚠️ `FIM_HMAC_KEY` değerini izlenen sunucunun veritabanından ayrı bir yerde
+> (örneğin bir sır yöneticisinde) saklayın. Hem veritabanını hem anahtarı ele
+> geçiren bir saldırgan temel kaydı sahteleyebilir.
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Hızlı Başlangıç
 
-### Prerequisites
+### Gereksinimler
 
 - Python 3.12+
-- PostgreSQL 16+ *(optional — SQLite used by default)*
+- PostgreSQL 16+ *(isteğe bağlı, varsayılan olarak SQLite kullanılır)*
 
-### Installation
+### Kurulum
 
 ```bash
-# Clone the repository
-git clone https://github.com/hasancrlk/fim-sentinel.git
-cd fim-sentinel
+# Depoyu klonlayın
+git clone https://github.com/hasancrlk/dosya-butunlugu-izleme.git
+cd dosya-butunlugu-izleme
 
-# Create virtual environment
+# Sanal ortam oluşturun
 python -m venv .venv
 source .venv/bin/activate  # Linux/macOS
 # .venv\Scripts\activate   # Windows
 
-# Install dependencies
+# Bağımlılıkları yükleyin
 pip install -r requirements-dev.txt
 
-# Copy environment config
+# Ortam dosyasını kopyalayın (FIM_API_KEY ve FIM_HMAC_KEY'i değiştirin)
 cp .env.example .env
 
-# Initialize database
+# Veritabanını hazırlayın
 python -c "from app.db.session import init_db; init_db()"
 
-# Start the API server
+# API sunucusunu başlatın
 uvicorn app.main:app --reload
+```
+
+Rastgele, güçlü bir anahtar üretmek için:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
 ---
 
-## ⌨️ CLI Usage
+## ⌨️ Komut Satırı (CLI) Kullanımı
 
 ```bash
-# Create a baseline of a directory
+# Bir klasörün temel kaydını alın
 python -m cli.fim_cli baseline --path /var/www/html
 
-# Run an integrity scan
+# Bütünlük taraması yapın
 python -m cli.fim_cli scan --baseline-id 1
 
-# Export report as JSON
+# Raporu JSON olarak alın
 python -m cli.fim_cli report --scan-id 1 --format json
 
-# Export report as CSV
-python -m cli.fim_cli report --scan-id 1 --format csv > report.csv
+# Raporu CSV dosyasına yazın
+python -m cli.fim_cli report --scan-id 1 --format csv > rapor.csv
+
+# Denetim kaydı zincirinin sağlam olduğunu doğrulayın
+python -m cli.fim_cli verify-audit
 ```
 
-### Example Output
+Paketi `pip install -e .` ile kurarsanız aynı komutlar kısaca
+`fim-sentinel baseline …`, `fim-sentinel scan …` olarak da çalışır.
+
+| Komut | Ne yapar |
+|---|---|
+| `baseline --path <klasör>` | Klasörün imzalı temel kaydını oluşturur. `--follow-symlinks` ile bağlantılar takip edilir |
+| `scan --baseline-id <n>` | Klasörü yeniden tarar ve temel kayıtla karşılaştırır. Değişiklik varsa **çıkış kodu 2** |
+| `report --scan-id <n> --format json\|csv` | Taramanın raporunu standart çıktıya yazar |
+| `verify-audit` | Denetim kaydı zincirini baştan sona doğrular, kırık satırı gösterir |
+
+### Örnek Çıktı
 
 ```
 $ python -m cli.fim_cli scan --baseline-id 1
-Scanning: /var/www/html
+                    Scan #1 Results
 ┏━━━━━━━━━━┳━━━━━━━┓
 ┃ Metric   ┃ Count ┃
 ┡━━━━━━━━━━╇━━━━━━━┩
@@ -187,76 +276,98 @@ Scanning: /var/www/html
 └──────────┴──────────────────────────┴───────────────────────────┘
 ```
 
+Bu örnek tipik bir saldırı izi gösteriyor: `index.html` ve `config.php`
+değişmiş, klasöre de `shell.php` adında yeni bir dosya eklenmiş.
+
+### Düzenli tarama (cron)
+
+`scan` komutu değişiklik bulunca `2` koduyla çıkar. Bu sayede cron ya da
+CI işlerine kolayca uyarı bağlanabilir:
+
+```bash
+# Her saat başı tara, değişiklik varsa e-posta at
+0 * * * * cd /opt/dosya-butunlugu-izleme && .venv/bin/python -m cli.fim_cli scan -b 1 \
+  || echo "Dosya bütünlüğü uyarısı" | mail -s "FIM uyarısı" yonetici@ornek.com
+```
+
 ---
 
-## 🌐 API Usage
+## 🌐 API Kullanımı
 
-### Base URL
+### Temel adres
 
 ```
 http://localhost:8000
 ```
 
-### Endpoints
+`/health` ve `/docs` dışındaki bütün uçlar `X-API-Key` başlığı ister.
+API yalnızca `FIM_ALLOWED_PATHS` içinde listelenen klasörleri tarayabilir.
 
-| Method | Endpoint | Description |
+### Uçlar
+
+| Metot | Uç | Açıklama |
 |--------|----------|-------------|
-| `GET` | `/health` | Health check |
-| `GET` | `/docs` | OpenAPI (Swagger) documentation |
-| `POST` | `/api/v1/baseline` | Create a baseline snapshot |
-| `POST` | `/api/v1/scan` | Run integrity scan vs. baseline |
-| `GET` | `/api/v1/reports/{scan_id}` | Get scan report (JSON/CSV) |
+| `GET` | `/health` | Sağlık kontrolü |
+| `GET` | `/docs` | OpenAPI (Swagger) belgesi |
+| `POST` | `/api/v1/baseline` | Temel kayıt oluşturur |
+| `POST` | `/api/v1/scan` | Temel kayda göre bütünlük taraması yapar |
+| `GET` | `/api/v1/reports/{scan_id}` | Tarama raporunu verir (JSON/CSV) |
+| `GET` | `/api/v1/audit/verify` | Denetim kaydı zincirini doğrular |
 
-### curl Examples
+### curl örnekleri
 
 ```bash
-# Health check
+# Sağlık kontrolü
 curl http://localhost:8000/health
 
-# Create baseline
+# Temel kayıt oluştur
 curl -H "X-API-Key: $FIM_API_KEY" -X POST http://localhost:8000/api/v1/baseline \
   -H "Content-Type: application/json" \
   -d '{"target_path": "/var/www/html"}'
 
-# Run scan
+# Tarama yap
 curl -H "X-API-Key: $FIM_API_KEY" -X POST http://localhost:8000/api/v1/scan \
   -H "Content-Type: application/json" \
   -d '{"baseline_id": 1}'
 
-# Get report (JSON)
+# Raporu al (JSON)
 curl -H "X-API-Key: $FIM_API_KEY" http://localhost:8000/api/v1/reports/1
 
-# Get report (CSV)
-curl -H "X-API-Key: $FIM_API_KEY" http://localhost:8000/api/v1/reports/1?format=csv -o report.csv
+# Raporu al (CSV)
+curl -H "X-API-Key: $FIM_API_KEY" "http://localhost:8000/api/v1/reports/1?format=csv" -o rapor.csv
+
+# Denetim kaydını doğrula
+curl -H "X-API-Key: $FIM_API_KEY" http://localhost:8000/api/v1/audit/verify
 ```
 
 ---
 
-## 🐳 Docker Deployment
+## 🐳 Docker ile Kurulum
 
 ```bash
-# Configure secrets first (API key, HMAC key, Postgres password)
+# Önce sırları ayarlayın (API anahtarı, HMAC anahtarı, PostgreSQL parolası)
 cp .env.example .env && $EDITOR .env
 
-# Build and start (app + PostgreSQL; migrations run automatically)
+# Derleyip başlatın (uygulama + PostgreSQL; migration'lar otomatik çalışır)
 docker compose up -d --build
 
-# View logs
+# Günlükleri izleyin
 docker compose logs -f fim-sentinel
 
-# Stop
+# Durdurun
 docker compose down
 ```
 
-The API listens on `127.0.0.1:8000`; PostgreSQL is not exposed to the host.
+API `127.0.0.1:8000` adresinde dinler. PostgreSQL ana makineye açılmaz.
 
-Mount a directory to monitor:
+İzlenecek klasörü bağlamak için:
+
 ```bash
-# In docker-compose.yml, the ./watch directory is mounted at /watch
+# docker-compose.yml içinde ./watch klasörü konteynerde /watch olarak bağlı
 mkdir -p watch
-cp -r /path/to/monitor/* watch/
+cp -r /izlenecek/klasor/* watch/
 
-# Then baseline it
+# Ardından temel kaydını alın
 curl -H "X-API-Key: $FIM_API_KEY" -X POST http://localhost:8000/api/v1/baseline \
   -d '{"target_path": "/watch"}' \
   -H "Content-Type: application/json"
@@ -264,90 +375,83 @@ curl -H "X-API-Key: $FIM_API_KEY" -X POST http://localhost:8000/api/v1/baseline 
 
 ---
 
-## 🧪 Testing
+## 🧪 Testler
 
 ```bash
-# Run all tests
+# Bütün testleri çalıştırın
 pytest tests/ -v
 
-# Run with coverage
+# Kısa hata çıktısıyla
 pytest tests/ -v --tb=short
 
-# Run specific test module
+# Tek bir modülü çalıştırın
 pytest tests/test_hasher.py -v
 pytest tests/test_diff_engine.py -v
 pytest tests/test_api.py -v
 ```
 
-### Test Coverage
+### Test kapsamı
 
-| Module | Tests |
+| Modül | Sınananlar |
 |--------|-------|
-| `hasher.py` | Known hash, empty/large file, permission denied, missing file, symlink handling, mode collection |
-| `scanner.py` | File counting, hash verification, non-existent dir, empty dir |
-| `diff_engine.py` | Modified/added/deleted, unreadable ≠ deleted, permission change, symlink retarget |
-| `API` | Full workflow, auth, path allowlist, tampered baseline (409), audit chain verification |
+| `hasher.py` | Bilinen özet, boş ve büyük dosya, izin reddi, olmayan dosya, sembolik bağlantı, izin bilgisinin toplanması |
+| `scanner.py` | Dosya sayımı, özet doğrulama, olmayan klasör, boş klasör |
+| `diff_engine.py` | Değişen/eklenen/silinen, okunamayan ≠ silinen, izin değişikliği, bağlantı hedefinin değişmesi |
+| `API` | Uçtan uca akış, kimlik doğrulama, klasör izin listesi, kurcalanmış temel kayıt (409), denetim zinciri doğrulaması |
 
 ---
 
-## ⚙️ Configuration
+## ⚙️ Yapılandırma
 
-All settings are loaded from environment variables (prefix: `FIM_`) or a `.env` file.
+Tüm ayarlar `FIM_` önekli ortam değişkenlerinden ya da `.env` dosyasından okunur.
 
-| Variable | Default | Description |
+| Değişken | Varsayılan | Açıklama |
 |----------|---------|-------------|
-| `FIM_DATABASE_URL` | `sqlite:///./fim_sentinel.db` | Database connection string |
-| `FIM_HASH_CHUNK_SIZE` | `65536` | Bytes per chunk for streaming hash |
-| `FIM_FOLLOW_SYMLINKS` | `false` | Follow symbolic links during scan |
-| `FIM_LOG_LEVEL` | `INFO` | Logging level |
-| `FIM_API_KEY` | — (**required for API**) | Value expected in the `X-API-Key` header |
-| `FIM_HMAC_KEY` | — (**required**, ≥32 chars) | Signs baselines and the audit chain |
-| `FIM_ALLOWED_PATHS` | `[]` | JSON list of directories the API may scan |
+| `FIM_DATABASE_URL` | `sqlite:///./fim_sentinel.db` | Veritabanı bağlantı adresi |
+| `FIM_HASH_CHUNK_SIZE` | `65536` | Parçalı özet için parça boyutu (bayt) |
+| `FIM_FOLLOW_SYMLINKS` | `false` | Taramada sembolik bağlantıları takip et |
+| `FIM_LOG_LEVEL` | `INFO` | Günlük seviyesi |
+| `FIM_API_KEY` | — (**API için zorunlu**) | `X-API-Key` başlığında beklenen değer |
+| `FIM_HMAC_KEY` | — (**zorunlu**, ≥32 karakter) | Temel kayıtları ve denetim zincirini imzalar |
+| `FIM_ALLOWED_PATHS` | `[]` | API'nin tarayabileceği klasörlerin JSON listesi |
 
-> `fim-sentinel scan` exits with code **2** when changes are found, so it can drive cron jobs or CI alerts.
+> `scan` komutu değişiklik bulduğunda **2** koduyla çıkar. Böylece cron
+> işleri ya da CI uyarıları doğrudan bu koda bağlanabilir.
 
 ---
 
-## 📁 Project Structure
+## 📁 Proje Yapısı
 
 ```
-fim-sentinel/
+dosya-butunlugu-izleme/
 ├── app/
-│   ├── api/v1/endpoints/   # FastAPI route handlers
-│   ├── db/                 # Engine, session, repository
-│   ├── models/             # SQLAlchemy ORM models
-│   ├── schemas/            # Pydantic request/response schemas
-│   ├── services/           # Core business logic
+│   ├── api/v1/endpoints/   # FastAPI uç işleyicileri
+│   ├── db/                 # Motor, oturum, repository
+│   ├── models/             # SQLAlchemy ORM modelleri
+│   ├── schemas/            # Pydantic istek/yanıt şemaları
+│   ├── services/           # Asıl iş mantığı (özet, tarama, fark, imza, rapor)
 │   ├── config.py           # Pydantic Settings
-│   └── main.py             # FastAPI application factory
-├── cli/                    # Typer CLI
-├── alembic/                # Database migrations
-├── tests/                  # Pytest test suite
-├── Dockerfile              # Multi-stage Docker build
-├── docker-compose.yml      # App + PostgreSQL
+│   └── main.py             # FastAPI uygulama fabrikası
+├── cli/                    # Typer komut satırı aracı
+├── alembic/                # Veritabanı migration'ları
+├── tests/                  # Pytest test takımı
+├── Dockerfile              # Çok aşamalı Docker imajı
+├── docker-compose.yml      # Uygulama + PostgreSQL
 └── README.md
 ```
 
 ---
 
-## 🤝 Contributing
+## 🤝 Katkıda Bulunma
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
----
-
-## 📄 License
-
-Distributed under the MIT License. See `LICENSE` for more information.
+1. Depoyu fork'layın
+2. Yeni bir dal açın (`git checkout -b ozellik/yeni-ozellik`)
+3. Değişikliklerinizi commit'leyin (`git commit -m 'Yeni özellik eklendi'`)
+4. Dalınızı gönderin (`git push origin ozellik/yeni-ozellik`)
+5. Bir Pull Request açın
 
 ---
 
-<div align="center">
+## 📄 Lisans
 
-**Built with ❤️ for the cybersecurity community**
-
-</div>
+MIT Lisansı ile dağıtılmaktadır. Ayrıntılar için [LICENSE](LICENSE) dosyasına bakın.
